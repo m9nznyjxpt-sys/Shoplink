@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ShopLink</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="wrap"><div class="logo">ShopLink</div><div id="root"></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script><script src="common.js"></script>
+<script>
+const id=deviceId();
+const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY,{global:{headers:{"x-device-id":id}},auth:{persistSession:false}});
+let shown=null,filter="all",sound=false,seen=new Set(),chests=[],first=true;
+function lock(st){
+  if(shown===st)return;shown=st;
+  const wait=st==="pending",rev=st==="revoked";
+  $("root").innerHTML=`<div class="panel"><div class="inner"><span class="pill ${wait?'wait':'no'}">${wait?'ĐANG CHỜ DUYỆT':rev?'ĐÃ BỊ THU HỒI':'CHƯA CẤP PHÉP'}</span>
+  <p class="muted" style="margin:18px 0 0">Thiết bị của bạn chưa được cấp quyền truy cập danh sách link. Vui lòng gửi ID thiết bị sau đây cho Admin:</p>
+  <div class="idbox"><code>${esc(id)}</code><button id="cp">Sao chép</button></div></div>
+  <p class="muted" style="text-align:center;margin:16px 0 0">Sau khi Admin cấp quyền thành công, trang sẽ tự mở khóa.</p></div>`;
+  $("cp").onclick=()=>copyText(id,$("cp"));
+}
+function app(){
+  if(shown==="approved")return;shown="approved";
+  $("root").innerHTML=`<div class="bar" id="fl"></div><div class="bar"><button id="snd">🔔 Âm báo: tắt</button></div><div class="stats" id="st"></div><div id="feed" style="margin-top:8px"></div>`;
+  [["all","Tất cả"],["box","🎁"],["tele","🟡"],["clover","🍀"],["bag","🟪"]].forEach(([k,l])=>{const b=document.createElement("button");b.textContent=l;b.dataset.k=k;b.onclick=()=>{filter=k;draw()};$("fl").appendChild(b)});
+  $("snd").onclick=()=>{sound=!sound;$("snd").textContent="🔔 Âm báo: "+(sound?"bật":"tắt");if(sound)beep()};
+}
+function draw(newCodes=new Set()){
+  [...$("fl").children].forEach(b=>b.className=b.dataset.k===filter?"on":"");
+  const list=chests.filter(o=>filter==="all"||o.type===filter);
+  $("st").textContent=`Tổng ${chests.length} rương`;
+  const f=$("feed");f.innerHTML="";
+  if(!list.length)f.innerHTML='<div class="card muted" style="text-align:center">Chưa có rương nào.</div>';
+  list.forEach(o=>f.appendChild(chestCard(o,newCodes.has(o.code))));
+}
+async function tick(){
+  try{
+    const {data,error}=await sb.from("devices").select("status").eq("id",id).maybeSingle();
+    if(error)throw error;
+    const st=data?.status||"none";
+    if(st!=="approved"){chests=[];first=true;lock(st);return}
+    app();
+    const r=await sb.from("chests").select("*").order("created_at",{ascending:false}).limit(100);
+    if(r.error)throw r.error;
+    chests=r.data;
+    const nw=new Set(first?[]:chests.filter(o=>!seen.has(o.code)).map(o=>o.code));
+    chests.forEach(o=>seen.add(o.code));
+    if(nw.size&&sound)beep();first=false;draw(nw);
+  }catch(e){if(!shown)$("root").innerHTML=`<div class="panel"><div class="inner muted">Không kết nối được máy chủ. Kiểm tra config.js.</div></div>`}
+}
+(async()=>{
+  await sb.from("devices").upsert({id,status:"pending"},{onConflict:"id",ignoreDuplicates:true});
+  tick();setInterval(tick,3000);
+})();
+</script></body></html>

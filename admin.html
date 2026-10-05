@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ShopLink Admin</title><link rel="stylesheet" href="style.css"></head><body>
+<div class="wrap"><div class="logo">ShopLink</div><div id="root"></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script><script src="common.js"></script>
+<script>
+const sb=supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY);
+let timer;
+const fail=e=>alert(e.message||e);
+function login(){
+  clearInterval(timer);
+  $("root").innerHTML=`<div class="panel"><div class="inner"><h3 style="margin-top:0">🛡 Đăng nhập Admin</h3>
+  <div class="row"><input id="em" type="email" placeholder="Email" style="flex:1"></div>
+  <div class="row"><input id="pw" type="password" placeholder="Mật khẩu" style="flex:1"></div>
+  <div class="row"><button class="pri" id="go" style="flex:1">Đăng nhập</button></div></div></div>`;
+  $("go").onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$("em").value,password:$("pw").value});if(error)return fail(error);start()};
+}
+async function start(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session)return login();
+  const {error}=await sb.from("devices").select("id").limit(1);
+  const {data:isAdm}=await sb.rpc("is_admin");
+  if(error||!isAdm){$("root").innerHTML=`<div class="panel"><div class="inner"><span class="pill no">KHÔNG CÓ QUYỀN ADMIN</span><p class="muted">Tài khoản này chưa nằm trong bảng admins.</p><button id="lo">Đăng xuất</button></div></div>`;$("lo").onclick=async()=>{await sb.auth.signOut();login()};return}
+  $("root").innerHTML=`<div class="bar"><a href="index.html" style="color:#7fb2ff">← Xem danh sách</a><button id="lo" style="margin-left:auto">Đăng xuất</button></div>
+  <h3>⏳ Chờ duyệt</h3><div id="pend"></div><h3>✅ Đã cấp phép</h3><div id="appr"></div><h3>⛔ Đã thu hồi</h3><div id="rev"></div>
+  <h3>➕ Thêm rương</h3>
+  <div class="row"><select id="ft"><option value="box">🎁 Thường</option><option value="tele">🟡 Dịch chuyển</option><option value="clover">🍀 Cỏ</option><option value="bag">🟪 Bag</option></select>
+  <input id="fi" placeholder="Mã" size="7"><input id="fc" type="number" placeholder="Hiện" style="width:68px"><input id="fm" type="number" placeholder="Max" style="width:68px"></div>
+  <div class="row"><input id="fl2" placeholder="Link phòng live" style="flex:1"><button class="pri" id="fa">Thêm</button></div>
+  <h3>📥 Nhập JSON</h3><textarea id="js" placeholder='[{"id":"R1","type":"box","cur":50,"max":30,"rate":1.7,"views":124,"link":"https://..."}]'></textarea>
+  <div class="row"><button id="ji">Nhập</button><button class="bad" id="cl">Xóa hết rương</button></div>`;
+  $("lo").onclick=async()=>{await sb.auth.signOut();login()};
+  $("fa").onclick=()=>ingest([{id:$("fi").value||"R"+Math.floor(Math.random()*90000+10000),type:$("ft").value,cur:$("fc").value,max:$("fm").value,link:$("fl2").value}]);
+  $("ji").onclick=()=>{try{let a=JSON.parse($("js").value);if(!Array.isArray(a))a=[a];ingest(a).then(()=>$("js").value="")}catch(e){alert("JSON không hợp lệ")}};
+  $("cl").onclick=async()=>{if(confirm("Xóa toàn bộ rương?")){const {error}=await sb.from("chests").delete().gt("id",0);if(error)fail(error)}};
+  load();timer=setInterval(load,4000);
+}
+async function ingest(a){
+  const rows=a.map(o=>({code:String(o.id||o.code||"?").slice(0,20),type:T[o.type]?o.type:"box",cur:+o.cur||0,max:+o.max||0,flag:String(o.flag||"").slice(0,8),rate:o.rate===""||o.rate==null||isNaN(+o.rate)?null:+o.rate,views:+o.views||0,level:o.level===""||o.level==null?null:+o.level,note:String(o.note||"").slice(0,120),link:safeUrl(o.link)||null,sec:+o.sec||47}));
+  const {error}=await sb.from("chests").upsert(rows,{onConflict:"code"});if(error)fail(error);
+}
+function row(d,btns){
+  const e=document.createElement("div");e.className="dev";e.innerHTML=`<code title="${esc(d.id)}">${esc(d.id)}</code>`;
+  btns.forEach(([l,c,s])=>{const b=document.createElement("button");b.textContent=l;b.className=c;b.onclick=async()=>{const {error}=await s();if(error)fail(error);else load()};e.appendChild(b)});return e;
+}
+const setSt=(id,status)=>()=>sb.from("devices").update({status,approved_at:status==="approved"?new Date().toISOString():null}).eq("id",id);
+const del=id=>()=>sb.from("devices").delete().eq("id",id);
+async function load(){
+  const {data,error}=await sb.from("devices").select("*").order("created_at",{ascending:false}).limit(500);
+  if(error||!$("pend"))return;
+  const g=s=>data.filter(d=>d.status===s);
+  const fill=(el,list,mk)=>{el.innerHTML="";if(!list.length)el.innerHTML='<div class="muted">Trống.</div>';list.forEach(d=>el.appendChild(mk(d)))};
+  fill($("pend"),g("pending"),d=>row(d,[["Duyệt","ok",setSt(d.id,"approved")],["Từ chối","bad",del(d.id)]]));
+  fill($("appr"),g("approved"),d=>row(d,[["Thu hồi","bad",setSt(d.id,"revoked")]]));
+  fill($("rev"),g("revoked"),d=>row(d,[["Duyệt lại","ok",setSt(d.id,"approved")],["Xóa","bad",del(d.id)]]));
+}
+start();
+</script></body></html>
